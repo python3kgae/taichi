@@ -23,6 +23,7 @@
 #include "llvm/IR/Verifier.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/LegacyPassManager.h"
+#include "llvm/Passes/PassBuilder.h"
 #include "llvm/Support/DynamicLibrary.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Support/Error.h"
@@ -32,7 +33,6 @@
 #include "llvm/Transforms/Scalar.h"
 #include "llvm/Transforms/Scalar/GVN.h"
 #include "llvm/Transforms/IPO.h"
-
 #include "llvm/MC/TargetRegistry.h"
 #include "llvm/Support/Host.h"
 
@@ -248,8 +248,6 @@ void JITSessionCPU::global_optimize_module_cpu(llvm::Module *module) {
   b.LoopVectorize = true;
   b.SLPVectorize = true;
 
-  target_machine->adjustPassManager(b);
-
   b.populateFunctionPassManager(function_pass_manager);
   b.populateModulePassManager(module_pass_manager);
 
@@ -260,6 +258,43 @@ void JITSessionCPU::global_optimize_module_cpu(llvm::Module *module) {
       function_pass_manager.run(*i);
 
     function_pass_manager.doFinalization();
+  }
+
+  {
+    // Create the analysis managers.
+    llvm::LoopAnalysisManager lam;
+    llvm::FunctionAnalysisManager fam;
+    llvm::CGSCCAnalysisManager cgam;
+    llvm::ModuleAnalysisManager mam;
+
+    // Create the pass manager builder.
+    llvm::PassInstrumentationCallbacks pic;
+    llvm::PipelineTuningOptions pto;
+    std::optional<llvm::PGOOptions> pgoOpt;
+
+    PassBuilder pb(target_machine.get(), pto, pgoOpt, &pic);
+
+    llvm::OptimizationLevel level = llvm::OptimizationLevel::O3;
+
+    target_machine->registerPassBuilderCallbacks(pb);
+
+    pb.buildInlinerPipeline(level, ThinOrFullLTOPhase::FullLTOPostLink);
+
+    // Register all the basic analyses with the managers.
+    mam.registerPass([&] { return llvm::PassInstrumentationAnalysis(); });
+    pb.registerModuleAnalyses(mam);
+    pb.registerCGSCCAnalyses(cgam);
+    fam.registerPass([&] { return llvm::PassInstrumentationAnalysis(); });
+    pb.registerFunctionAnalyses(fam);
+    pb.registerLoopAnalyses(lam);
+    pb.crossRegisterProxies(lam, fam, cgam, mam);
+
+    // Create the pass manager.
+    llvm::ModulePassManager mpm;
+    mpm = pb.buildPerModuleDefaultPipeline(level);
+    // Optimize the IR!
+    TI_PROFILER("llvm_module_opt_pass");
+    mpm.run(*module, mam);
   }
 
   /*

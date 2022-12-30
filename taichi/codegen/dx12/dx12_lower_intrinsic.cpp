@@ -21,7 +21,26 @@ namespace {
 
 class TaichiIntrinsicLower : public ModulePass {
  public:
-  bool runOnModule(Module &M) override {
+  bool runOnModule(Module &M) override;
+
+  TaichiIntrinsicLower(taichi::lang::CompileConfig *config = nullptr)
+      : ModulePass(ID), config(config) {
+    initializeTaichiIntrinsicLowerPass(*PassRegistry::getPassRegistry());
+  }
+
+  static char ID;  // Pass identification.
+ private:
+  taichi::lang::CompileConfig *config;
+};
+char TaichiIntrinsicLower::ID = 0;
+
+class TaichiIntrinsicLowerImpl {
+ public:
+  TaichiIntrinsicLowerImpl(
+      taichi::lang::CompileConfig *cfg)
+      : config(cfg) {
+  }
+  bool run(Module &M) {
     auto &Ctx = M.getContext();
     // patch intrinsic
     auto patch_intrinsic = [&](std::string name, Intrinsic::ID intrin,
@@ -95,17 +114,9 @@ class TaichiIntrinsicLower : public ModulePass {
     patch_intrinsic_to_const("grid_dim", NumWorkGroupX, I32Ty);
     return true;
   }
-
-  TaichiIntrinsicLower(taichi::lang::CompileConfig *config = nullptr)
-      : ModulePass(ID), config(config) {
-    initializeTaichiIntrinsicLowerPass(*PassRegistry::getPassRegistry());
-  }
-
-  static char ID;  // Pass identification.
  private:
   taichi::lang::CompileConfig *config;
 };
-char TaichiIntrinsicLower::ID = 0;
 
 }  // end anonymous namespace
 
@@ -115,7 +126,27 @@ INITIALIZE_PASS(TaichiIntrinsicLower,
                 false,
                 false)
 
+bool TaichiIntrinsicLower::runOnModule(Module &M) {
+  TaichiIntrinsicLowerImpl Impl(config);
+  return Impl.run(M);
+}
+
 llvm::ModulePass *llvm::createTaichiIntrinsicLowerPass(
     taichi::lang::CompileConfig *config) {
   return new TaichiIntrinsicLower(config);
+}
+
+llvm::TaichiIntrinsicLowerPass::TaichiIntrinsicLowerPass(
+    taichi::lang::CompileConfig *cfg)
+    : config(cfg) {
+}
+
+PreservedAnalyses llvm::TaichiIntrinsicLowerPass::run(
+    Module &M,
+    ModuleAnalysisManager &AM) {
+  TaichiIntrinsicLowerPass::name();
+  TaichiIntrinsicLowerImpl Impl(config);
+  if (Impl.run(M))
+    return PreservedAnalyses::none();
+  return PreservedAnalyses::all();
 }

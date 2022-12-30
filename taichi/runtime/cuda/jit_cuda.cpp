@@ -1,5 +1,7 @@
 #include "taichi/runtime/cuda/jit_cuda.h"
 #include "taichi/runtime/llvm/llvm_context.h"
+#include "llvm/Passes/PassBuilder.h"
+#include "llvm/Passes/StandardInstrumentations.h"
 
 namespace taichi::lang {
 
@@ -175,8 +177,6 @@ std::string JITSessionCUDA::compile_module_to_ptx(
   b.LoopVectorize = false;
   b.SLPVectorize = false;
 
-  target_machine->adjustPassManager(b);
-
   b.populateFunctionPassManager(function_pass_manager);
   b.populateModulePassManager(module_pass_manager);
 
@@ -209,6 +209,47 @@ std::string JITSessionCUDA::compile_module_to_ptx(
       function_pass_manager.run(*i);
 
     function_pass_manager.doFinalization();
+  }
+
+  {
+    // Create the analysis managers.
+    llvm::LoopAnalysisManager lam;
+    llvm::FunctionAnalysisManager fam;
+    llvm::CGSCCAnalysisManager cgam;
+    llvm::ModuleAnalysisManager mam;
+
+    // Create the pass manager builder.
+    llvm::PassInstrumentationCallbacks pic;
+    llvm::PipelineTuningOptions pto;
+    std::optional<llvm::PGOOptions> pgoOpt;
+    llvm::StandardInstrumentations si(module->getContext(),
+                                      config_->debug);
+    si.registerCallbacks(pic, &fam);
+    PassBuilder pb(target_machine.get(), pto, pgoOpt, &pic);
+
+    llvm::OptimizationLevel level = llvm::OptimizationLevel::O3;
+
+    target_machine->registerPassBuilderCallbacks(pb);
+
+    pb.buildInlinerPipeline(level, ThinOrFullLTOPhase::FullLTOPostLink);
+
+    // Register all the basic analyses with the managers.
+    mam.registerPass([&] { return llvm::PassInstrumentationAnalysis(); });
+    pb.registerModuleAnalyses(mam);
+    pb.registerCGSCCAnalyses(cgam);
+    fam.registerPass(
+        [&] { return llvm::PassInstrumentationAnalysis(); });
+    pb.registerFunctionAnalyses(fam);
+    pb.registerLoopAnalyses(lam);
+    pb.crossRegisterProxies(lam, fam, cgam, mam);
+
+    // Create the pass manager.
+    llvm::ModulePassManager mpm;
+    mpm = pb.buildPerModuleDefaultPipeline(level);
+
+    // Optimize the IR!
+    TI_PROFILER("llvm_module_opt_pass");
+    mpm.run(*module, mam);
   }
 
   {

@@ -3,6 +3,7 @@
 
 #include <string>
 #include <vector>
+#include "llvm/IR/PassManager.h"
 
 namespace llvm {
 class Function;
@@ -47,5 +48,21 @@ void initializeTaichiIntrinsicLowerPass(PassRegistry &);
 
 /// Pass to lower taichi intrinsic into DXIL intrinsic.
 ModulePass *createTaichiIntrinsicLowerPass(taichi::lang::CompileConfig *config);
+
+class TaichiIntrinsicLowerPass
+    : public PassInfoMixin<TaichiIntrinsicLowerPass> {
+ public:
+  PreservedAnalyses run(Module &M, ModuleAnalysisManager &AM);
+  explicit TaichiIntrinsicLowerPass(taichi::lang::CompileConfig *cfg);
+ private:
+  taichi::lang::CompileConfig *config;
+};
+
+class TaichiRuntimeContextLowerPass
+    : public PassInfoMixin<TaichiRuntimeContextLowerPass> {
+ public:
+  PreservedAnalyses run(Module &M, ModuleAnalysisManager &AM);
+  explicit TaichiRuntimeContextLowerPass();
+};
 
 }  // namespace llvm

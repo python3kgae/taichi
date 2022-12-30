@@ -20,6 +20,7 @@
 #include "llvm/IR/Module.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/LegacyPassManager.h"
+#include "llvm/Passes/PassBuilder.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/FormatVariadic.h"
@@ -115,9 +116,6 @@ std::vector<uint8_t> global_optimize_module(llvm::Module *module,
 
   module->setDataLayout(target_machine->createDataLayout());
 
-  // Lower taichi intrinsic first.
-  module_pass_manager.add(createTaichiIntrinsicLowerPass(&config));
-
   module_pass_manager.add(createTargetTransformInfoWrapperPass(
       target_machine->getTargetIRAnalysis()));
   function_pass_manager.add(createTargetTransformInfoWrapperPass(
@@ -129,12 +127,8 @@ std::vector<uint8_t> global_optimize_module(llvm::Module *module,
   b.LoopVectorize = true;
   b.SLPVectorize = true;
 
-  target_machine->adjustPassManager(b);
-
   b.populateFunctionPassManager(function_pass_manager);
   b.populateModulePassManager(module_pass_manager);
-  // Add passes after inline.
-  module_pass_manager.add(createTaichiRuntimeContextLowerPass());
 
   llvm::SmallString<256> str;
   llvm::raw_svector_ostream OS(str);
@@ -152,9 +146,48 @@ std::vector<uint8_t> global_optimize_module(llvm::Module *module,
   }
 
   {
+    // Create the analysis managers.
+    llvm::LoopAnalysisManager lam;
+    llvm::FunctionAnalysisManager fam;
+    llvm::CGSCCAnalysisManager cgam;
+    llvm::ModuleAnalysisManager mam;
+
+    // Create the pass manager builder.
+    llvm::PassInstrumentationCallbacks pic;
+    llvm::PipelineTuningOptions pto;
+    std::optional<llvm::PGOOptions> pgoOpt;
+
+    PassBuilder pb(target_machine.get(), pto, pgoOpt, &pic);
+
+    llvm::OptimizationLevel level = llvm::OptimizationLevel::O3;
+
+    target_machine->registerPassBuilderCallbacks(pb);
+
+    pb.buildInlinerPipeline(level, ThinOrFullLTOPhase::FullLTOPostLink);
+    ModuleInlinerWrapperPass inliner =
+        pb.buildInlinerPipeline(level, ThinOrFullLTOPhase::FullLTOPostLink);
+    // Add passes after inline.
+    inliner.addLateModulePass(TaichiRuntimeContextLowerPass());
+
+    // Lower taichi intrinsic first.
+    pb.registerOptimizerEarlyEPCallback(
+        [&pb, &config](ModulePassManager &PM, OptimizationLevel) {
+          PM.addPass(TaichiIntrinsicLowerPass(&config));
+        });
+    // Create the pass manager.
+    llvm::ModulePassManager mpm;
+    mpm = pb.buildPerModuleDefaultPipeline(level);
+
+    // Optimize the IR!
+    TI_PROFILER("llvm_module_opt_pass");
+    mpm.run(*module, mam);
+  }
+
+  {
     TI_PROFILER("llvm_module_pass");
     module_pass_manager.run(*module);
   }
+
   if (config.print_kernel_llvm_ir_optimized) {
     static FileSequenceWriter writer(
         "taichi_kernel_dx12_llvm_ir_optimized_{:04d}.ll",

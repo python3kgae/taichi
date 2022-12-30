@@ -22,10 +22,7 @@ namespace {
 
 class TaichiRuntimeContextLower : public ModulePass {
  public:
-  bool runOnModule(Module &M) override {
-    // TODO: lower taichi RuntimeContext into DXIL resources.
-    return true;
-  }
+  bool runOnModule(Module &M) override;
 
   TaichiRuntimeContextLower() : ModulePass(ID) {
     initializeTaichiRuntimeContextLowerPass(*PassRegistry::getPassRegistry());
@@ -36,6 +33,16 @@ class TaichiRuntimeContextLower : public ModulePass {
 };
 char TaichiRuntimeContextLower::ID = 0;
 
+class TaichiRuntimeContextLowerImpl {
+ public:
+  TaichiRuntimeContextLowerImpl() {
+  }
+  bool run(Module &M) {
+    // TODO: lower taichi RuntimeContext into DXIL resources.
+    return true;
+  }
+};
+
 }  // end anonymous namespace
 
 INITIALIZE_PASS(TaichiRuntimeContextLower,
@@ -44,6 +51,24 @@ INITIALIZE_PASS(TaichiRuntimeContextLower,
                 false,
                 false)
 
+bool TaichiRuntimeContextLower::runOnModule(Module &M) {
+  TaichiRuntimeContextLowerImpl Impl;
+  return Impl.run(M);
+}
+
 llvm::ModulePass *llvm::createTaichiRuntimeContextLowerPass() {
   return new TaichiRuntimeContextLower();
 }
+
+namespace llvm {
+TaichiRuntimeContextLowerPass::TaichiRuntimeContextLowerPass() {
+}
+PreservedAnalyses TaichiRuntimeContextLowerPass::run(
+    Module &M,
+    ModuleAnalysisManager &AM) {
+  TaichiRuntimeContextLowerImpl Impl;
+  if (Impl.run(M))
+    return PreservedAnalyses::none();
+  return PreservedAnalyses::all();
+}
+}  // namespace llvm

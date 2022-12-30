@@ -129,7 +129,7 @@ if (APPLE)
 endif()
 
 # Highest clang version that we've tested
-set(CLANG_HIGHEST_VERSION "15")
+set(CLANG_HIGHEST_VERSION "16")
 
 check_clang_version()
 
